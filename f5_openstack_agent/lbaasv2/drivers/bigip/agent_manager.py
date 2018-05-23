@@ -435,7 +435,6 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
             LOG.debug("periodic_sync: service_resync_interval expired: %s"
                       % str(self.needs_resync))
         # resync if we need to
-        #wtn : HIER BIST DU VOR DEM URLAUB STEHEN GEBLIEBEN
         if self.needs_resync:
             LOG.info('periodic_resync: Forcing resync of services.')
             self.needs_resync = False
