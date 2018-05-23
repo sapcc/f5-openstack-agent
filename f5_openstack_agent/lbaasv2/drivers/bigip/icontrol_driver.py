@@ -22,7 +22,9 @@ import hashlib
 import json
 import logging as std_logging
 import os
+import urllib
 import urllib2
+from requests import HTTPError
 
 from eventlet import greenthread
 from time import strftime
@@ -791,6 +793,430 @@ class iControlDriver(LBaaSBaseDriver):
             bigip.assured_tenant_snat_subnets = {}
             bigip.assured_gateway_subnets = []
 
+    @serialized('get_all_deployed_loadbalancers')
+    @is_connected
+    def get_all_deployed_loadbalancers(self, purge_orphaned_folders=False):
+        LOG.debug('getting all deployed loadbalancers on BIG-IPs')
+        deployed_lb_dict = {}
+        for bigip in self.get_all_bigips():
+            folders = self.system_helper.get_folders(bigip)
+            for folder in folders:
+                tenant_id = folder[len(self.service_adapter.prefix):]
+                if str(folder).startswith(self.service_adapter.prefix):
+                    resource = resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.virtual_address)
+                    deployed_lbs = resource.get_resources(bigip, folder)
+                    if deployed_lbs:
+                        for lb in deployed_lbs:
+                            lb_id = lb.name[len(self.service_adapter.prefix):]
+                            if lb_id in deployed_lb_dict:
+                                deployed_lb_dict[lb_id][
+                                    'hostnames'].append(bigip.hostname)
+                            else:
+                                deployed_lb_dict[lb_id] = {
+                                    'id': lb_id,
+                                    'tenant_id': tenant_id,
+                                    'hostnames': [bigip.hostname]
+                                }
+                    else:
+                        # delay to assure we are not in the tenant creation
+                        # process before a virtual address is created.
+                        greenthread.sleep(10)
+                        deployed_lbs = resource.get_resources(bigip, folder)
+                        if deployed_lbs:
+                            for lb in deployed_lbs:
+                                lb_id = lb.name[
+                                    len(self.service_adapter.prefix):]
+                                deployed_lb_dict[lb_id] = \
+                                    {'id': lb_id, 'tenant_id': tenant_id}
+                        else:
+                            # Orphaned folder!
+                            if purge_orphaned_folders:
+                                try:
+                                    self.system_helper.purge_folder_contents(
+                                        bigip, folder)
+                                    self.system_helper.purge_folder(
+                                        bigip, folder)
+                                    LOG.error('orphaned folder %s on %s' %
+                                              (folder, bigip.hostname))
+                                except Exception as exc:
+                                    LOG.error('Error purging folder %s: %s' %
+                                              (folder, str(exc)))
+        return deployed_lb_dict
+
+    @serialized('get_all_deployed_listeners')
+    @is_connected
+    def get_all_deployed_listeners(self, expand_subcollections=False):
+        LOG.debug('getting all deployed listeners on BIG-IPs')
+        deployed_virtual_dict = {}
+        for bigip in self.get_all_bigips():
+            folders = self.system_helper.get_folders(bigip)
+            for folder in folders:
+                tenant_id = folder[len(self.service_adapter.prefix):]
+                if str(folder).startswith(self.service_adapter.prefix):
+                    resource = resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.virtual)
+                    deployed_listeners = resource.get_resources(
+                        bigip, folder, expand_subcollections)
+                    if deployed_listeners:
+                        for virtual in deployed_listeners:
+                            virtual_id = \
+                                virtual.name[len(self.service_adapter.prefix):]
+                            l7_policy = ''
+                            if hasattr(virtual, 'policiesReference') and \
+                                    'items' in virtual.policiesReference:
+                                l7_policy = \
+                                    virtual.policiesReference['items'][0]
+                                l7_policy = l7_policy['fullPath']
+                            if virtual_id in deployed_virtual_dict:
+                                deployed_virtual_dict[virtual_id][
+                                    'hostnames'].append(bigip.hostname)
+                            else:
+                                deployed_virtual_dict[virtual_id] = {
+                                    'id': virtual_id,
+                                    'tenant_id': tenant_id,
+                                    'hostnames': [bigip.hostname],
+                                    'l7_policy': l7_policy
+                                }
+        return deployed_virtual_dict
+
+    @serialized('purge_orphaned_nodes')
+    @is_connected
+    @log_helpers.log_method_call
+    def purge_orphaned_nodes(self, tenant_members):
+        # wtn
+        node_helper = resource_helper.BigIPResourceHelper(
+            resource_helper.ResourceType.node)
+        for bigip in self.get_all_bigips():
+            for tenant_id, members in tenant_members.iteritems():
+                partition = self.service_adapter.prefix + tenant_id
+                nodes = node_helper.get_resources(bigip, partition=partition)
+                node_dict = {n.name: n for n in nodes}
+                # extract member addresses (they don't have rd info) into array
+                member_addresses = []
+                for m in members:
+                    member_addresses.append(m['address'])
+                # all nodes are orphaned which aren't referenced as member
+                orphaned_nodes = []
+                for n in nodes:
+                    if '%' not in n.address:
+                        orphaned_nodes.append(n.name)
+                    elif not n.address.split('%')[0] in member_addresses:
+                        orphaned_nodes.append(n.name)
+
+                for node_name in orphaned_nodes:
+                    try:
+                        node_helper.delete(bigip, name=urllib.quote(node_name),
+                                           partition=partition)
+                    except HTTPError as error:
+                        if error.response.status_code == 400:
+                            LOG.error(error.response)
+
+                # for member in members:
+                #
+                #     rd = self.network_builder.find_subnet_route_domain(
+                #         tenant_id, member.get('subnet_id', None))
+                #     node_name = "{}%{}".format(member['address'], rd)
+                #     node_dict.pop(node_name, None)
+                #
+                # for node_name, node in node_dict.iteritems():
+                #     try:
+                #         node_helper.delete(bigip, name=urllib.quote(node_name),
+                #                            partition=partition)
+                #     except HTTPError as error:
+                #         if error.response.status_code == 400:
+                #             LOG.error(error.response)
+
+    @serialized('get_all_deployed_pools')
+    @is_connected
+    def get_all_deployed_pools(self):
+        LOG.debug('getting all deployed pools on BIG-IPs')
+        deployed_pool_dict = {}
+        for bigip in self.get_all_bigips():
+            folders = self.system_helper.get_folders(bigip)
+            for folder in folders:
+                tenant_id = folder[len(self.service_adapter.prefix):]
+                if str(folder).startswith(self.service_adapter.prefix):
+                    resource = resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.pool)
+                    deployed_pools = resource.get_resources(bigip, folder)
+                    if deployed_pools:
+                        for pool in deployed_pools:
+                            pool_id = \
+                                pool.name[len(self.service_adapter.prefix):]
+                            monitor_id = ''
+                            if hasattr(pool, 'monitor'):
+                                monitor = pool.monitor.split('/')[2].strip()
+                                monitor_id = \
+                                    monitor[len(self.service_adapter.prefix):]
+                                LOG.debug(
+                                    'pool {} has monitor {}'.format(
+                                        pool.name, monitor))
+                            else:
+                                LOG.debug(
+                                    'pool {} has no healthmonitors'.format(
+                                        pool.name))
+                            if pool_id in deployed_pool_dict:
+                                deployed_pool_dict[pool_id][
+                                    'hostnames'].append(bigip.hostname)
+                            else:
+                                deployed_pool_dict[pool_id] = {
+                                    'id': pool_id,
+                                    'tenant_id': tenant_id,
+                                    'hostnames': [bigip.hostname],
+                                    'monitors': monitor_id
+                                }
+        return deployed_pool_dict
+
+    @serialized('purge_orphaned_pool')
+    @is_connected
+    @log_helpers.log_method_call
+    def purge_orphaned_pool(self, tenant_id=None, pool_id=None,
+                            hostnames=list()):
+        node_helper = resource_helper.BigIPResourceHelper(
+            resource_helper.ResourceType.node)
+        for bigip in self.get_all_bigips():
+            if bigip.hostname in hostnames:
+                try:
+                    pool_name = self.service_adapter.prefix + pool_id
+                    partition = self.service_adapter.prefix + tenant_id
+                    pool = resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.pool).load(
+                            bigip, pool_name, partition)
+                    members = pool.members_s.get_collection()
+                    pool.delete()
+                    for member in members:
+                        node_name = member.address
+                        try:
+                            node_helper.delete(bigip,
+                                               name=urllib.quote(node_name),
+                                               partition=partition)
+                        except HTTPError as e:
+                            if e.response.status_code == 404:
+                                pass
+                            if e.response.status_code == 400:
+                                LOG.warn("Failed to delete node -- in use")
+                            else:
+                                LOG.exception("Failed to delete node")
+                except HTTPError as err:
+                    if err.response.status_code == 404:
+                        LOG.debug('pool %s not on BIG-IP %s.'
+                                  % (pool_id, bigip.hostname))
+                except Exception as exc:
+                    LOG.exception('Exception purging pool %s' % str(exc))
+
+    @serialized('get_all_deployed_monitors')
+    @is_connected
+    def get_all_deployed_health_monitors(self):
+        """Retrieve a list of all Health Monitors deployed"""
+        LOG.debug('getting all deployed monitors on BIG-IP\'s')
+        monitor_types = ['http_monitor', 'https_monitor', 'tcp_monitor',
+                         'ping_monitor']
+        deployed_monitor_dict = {}
+        adapter_prefix = self.service_adapter.prefix
+        for bigip in self.get_all_bigips():
+            folders = self.system_helper.get_folders(bigip)
+            for folder in folders:
+                tenant_id = folder[len(adapter_prefix):]
+                if str(folder).startswith(adapter_prefix):
+                    resources = map(
+                        lambda x: resource_helper.BigIPResourceHelper(
+                            getattr(resource_helper.ResourceType, x)),
+                        monitor_types)
+                    for resource in resources:
+                        deployed_monitors = resource.get_resources(
+                            bigip, folder)
+                        if deployed_monitors:
+                            for monitor in deployed_monitors:
+                                monitor_id = monitor.name[len(adapter_prefix):]
+                                if monitor_id in deployed_monitor_dict:
+                                    deployed_monitor_dict[monitor_id][
+                                        'hostnames'].append(bigip.hostname)
+                                else:
+                                    deployed_monitor_dict[monitor_id] = {
+                                        'id': monitor_id,
+                                        'tenant_id': tenant_id,
+                                        'hostnames': [bigip.hostname]
+                                    }
+        return deployed_monitor_dict
+
+    @serialized('purge_orphaned_health_monitor')
+    @is_connected
+    @log_helpers.log_method_call
+    def purge_orphaned_health_monitor(self, tenant_id=None, monitor_id=None,
+                                      hostnames=list()):
+        """Purge all monitors that exist on the BIG-IP but not in Neutron"""
+        resource_types = [
+            resource_helper.BigIPResourceHelper(x) for x in [
+                resource_helper.ResourceType.http_monitor,
+                resource_helper.ResourceType.https_monitor,
+                resource_helper.ResourceType.ping_monitor,
+                resource_helper.ResourceType.tcp_monitor]]
+        for bigip in self.get_all_bigips():
+            if bigip.hostname in hostnames:
+                try:
+                    monitor_name = self.service_adapter.prefix + monitor_id
+                    partition = self.service_adapter.prefix + tenant_id
+                    monitor = None
+                    for monitor_type in resource_types:
+                        try:
+                            monitor = monitor_type.load(bigip, monitor_name,
+                                                        partition)
+                            break
+                        except HTTPError as err:
+                            if err.response.status_code == 404:
+                                continue
+                    monitor.delete()
+                except TypeError as err:
+                    if 'NoneType' in err:
+                        LOG.exception("Could not find monitor {}".format(
+                                      monitor_name))
+                except Exception as exc:
+                    LOG.exception('Exception purging monitor %s' % str(exc))
+
+    @serialized('get_all_deployed_l7_policys')
+    @is_connected
+    def get_all_deployed_l7_policys(self):
+        """Retrieve a dict of all l7policies deployed
+
+        The dict returned will have the following format:
+            {policy_bigip_id_0: {'id': policy_id_0,
+                                 'tenant_id': tenant_id,
+                                 'hostnames': [hostnames_0]}
+             ...
+            }
+        Where hostnames is the list of BIG-IP hostnames impacted, and the
+        policy_id is the policy_bigip_id without 'wrapper_policy_'
+        """
+        LOG.debug('getting all deployed l7_policys on BIG-IP\'s')
+        deployed_l7_policys_dict = {}
+        for bigip in self.get_all_bigips():
+            folders = self.system_helper.get_folders(bigip)
+            for folder in folders:
+                tenant_id = folder[len(self.service_adapter.prefix):]
+                if str(folder).startswith(self.service_adapter.prefix):
+                    resource = resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.l7policy)
+                    deployed_l7_policys = resource.get_resources(
+                        bigip, folder)
+                    if deployed_l7_policys:
+                        for l7_policy in deployed_l7_policys:
+                            l7_policy_id = l7_policy.name
+                            if l7_policy_id in deployed_l7_policys_dict:
+                                my_dict = \
+                                    deployed_l7_policys_dict[l7_policy_id]
+                                my_dict['hostnames'].append(bigip.hostname)
+                            else:
+                                po_id = l7_policy_id.replace(
+                                    'wrapper_policy_', '')
+                                deployed_l7_policys_dict[l7_policy_id] = {
+                                    'id': po_id,
+                                    'tenant_id': tenant_id,
+                                    'hostnames': [bigip.hostname]
+                                }
+        return deployed_l7_policys_dict
+
+    @serialized('purge_orphaned_l7_policy')
+    @is_connected
+    @log_helpers.log_method_call
+    def purge_orphaned_l7_policy(self, tenant_id=None, l7_policy_id=None,
+                                 hostnames=list(), listener_id=None):
+        """Purge all l7_policys that exist on the BIG-IP but not in Neutron"""
+        for bigip in self.get_all_bigips():
+            if bigip.hostname in hostnames:
+                error = None
+                try:
+                    l7_policy_name = l7_policy_id
+                    partition = self.service_adapter.prefix + tenant_id
+                    if listener_id and partition:
+                        if self.service_adapter.prefix not in listener_id:
+                            listener_id = \
+                                self.service_adapter.prefix + listener_id
+                        li_resource = resource_helper.BigIPResourceHelper(
+                            resource_helper.ResourceType.virtual).load(
+                                bigip, listener_id, partition)
+                        li_resource.update(policies=[])
+                    l7_policy = resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.l7policy).load(
+                            bigip, l7_policy_name, partition)
+                    l7_policy.delete()
+                except HTTPError as err:
+                    if err.response.status_code == 404:
+                        LOG.debug('l7_policy %s not on BIG-IP %s.'
+                                  % (l7_policy_id, bigip.hostname))
+                    else:
+                        error = err
+                except Exception as exc:
+                    error = err
+                if error:
+                    kwargs = dict(
+                        tenant_id=tenant_id, l7_policy_id=l7_policy_id,
+                        hostname=bigip.hostname, listener_id=listener_id)
+                    LOG.exception('Exception: purge_orphaned_l7_policy({}) '
+                                  '"{}"'.format(kwargs, exc))
+
+    @serialized('purge_orphaned_loadbalancer')
+    @is_connected
+    @log_helpers.log_method_call
+    def purge_orphaned_loadbalancer(self, tenant_id=None,
+                                    loadbalancer_id=None, hostnames=list()):
+        for bigip in self.get_all_bigips():
+            if bigip.hostname in hostnames:
+                try:
+                    va_name = self.service_adapter.prefix + loadbalancer_id
+                    partition = self.service_adapter.prefix + tenant_id
+                    va = resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.virtual_address).load(
+                            bigip, va_name, partition)
+                    # get virtual services (listeners)
+                    # referencing this virtual address
+                    vses = resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.virtual).get_resources(
+                            bigip, partition)
+                    vs_dest_compare = '/' + partition + '/' + va.name
+                    for vs in vses:
+                        if str(vs.destination).startswith(vs_dest_compare):
+                            if hasattr(vs, 'pool'):
+                                pool = resource_helper.BigIPResourceHelper(
+                                    resource_helper.ResourceType.pool).load(
+                                        bigip, os.path.basename(vs.pool),
+                                        partition)
+                                vs.delete()
+                                pool.delete()
+                            else:
+                                vs.delete()
+                    resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.virtual_address).delete(
+                            bigip, va_name, partition)
+                except HTTPError as err:
+                    if err.response.status_code == 404:
+                        LOG.debug('loadbalancer %s not on BIG-IP %s.'
+                                  % (loadbalancer_id, bigip.hostname))
+                except Exception as exc:
+                    LOG.exception('Exception purging loadbalancer %s'
+                                  % str(exc))
+
+    @serialized('purge_orphaned_listener')
+    @is_connected
+    @log_helpers.log_method_call
+    def purge_orphaned_listener(
+            self, tenant_id=None, listener_id=None, hostnames=[]):
+        for bigip in self.get_all_bigips():
+            if bigip.hostname in hostnames:
+                try:
+                    listener_name = self.service_adapter.prefix + listener_id
+                    partition = self.service_adapter.prefix + tenant_id
+                    listener = resource_helper.BigIPResourceHelper(
+                        resource_helper.ResourceType.virtual).load(
+                            bigip, listener_name, partition)
+                    listener.delete()
+                except HTTPError as err:
+                    if err.response.status_code == 404:
+                        LOG.debug('listener %s not on BIG-IP %s.'
+                                  % (listener_id, bigip.hostname))
+                except Exception as exc:
+                    LOG.exception('Exception purging listener %s' % str(exc))
+
     @serialized('create_loadbalancer')
     @is_connected
     def create_loadbalancer(self, loadbalancer, service):
@@ -958,23 +1384,6 @@ class iControlDriver(LBaaSBaseDriver):
 
         finally:
             return lb_stats
-
-    @serialized('remove_orphans')
-    def remove_orphans(self, all_loadbalancers):
-        """Remove out-of-date configuration on big-ips """
-        existing_tenants = []
-        existing_lbs = []
-        for loadbalancer in all_loadbalancers:
-            existing_tenants.append(loadbalancer['tenant_id'])
-            existing_lbs.append(loadbalancer['lb_id'])
-
-        for bigip in self.get_all_bigips():
-            bigip.pool.purge_orphaned_pools(existing_lbs)
-        for bigip in self.get_all_bigips():
-            bigip.system.purge_orphaned_folders_contents(existing_tenants)
-
-        for bigip in self.get_all_bigips():
-            bigip.system.purge_orphaned_folders(existing_tenants)\
 
     def fdb_add(self, fdb):
         # Add (L2toL3) forwarding database entries
