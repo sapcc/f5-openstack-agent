@@ -847,7 +847,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
         LOG.debug('validated_pools_state returned: %s'
                   % listener_status)
         for listenerid in listener_status:
-            # If the pool status is Unknown, it no longer exists
+            # If the listener status is Unknown, it no longer exists
             # in Neutron and thus should be removed from BIG-IP
             if listener_status[listenerid] in ['Unknown']:
                 LOG.debug('removing orphaned listener %s'
