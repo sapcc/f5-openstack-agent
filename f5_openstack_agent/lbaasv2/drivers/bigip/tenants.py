@@ -98,8 +98,6 @@ class BigipTenantManager(object):
             # create rd in bigips where it's missing either with the given id or a new one to be determined
             for bigip in bigiprds:
                 try:
-                    if network_id.startswith('d14c42'):
-                        x = 1
                     bigip_route_domain = self.network_helper.create_route_domain(
                         bigip,
                         partition=const.DEFAULT_PARTITION,

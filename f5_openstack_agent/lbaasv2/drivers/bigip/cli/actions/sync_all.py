@@ -16,7 +16,7 @@ class SyncAll(base_action.BaseAction):
 
     def execute(self):
 
-        services = self.manager.plugin_rpc. get_all_loadbalancers(host=self.manager.agent_host)
+        services = self.manager.plugin_rpc.get_all_loadbalancers(host=self.manager.agent_host)
 
         if self.project_id is not None:
             print("Syncing all LBs in project {}".format(self.project_id))

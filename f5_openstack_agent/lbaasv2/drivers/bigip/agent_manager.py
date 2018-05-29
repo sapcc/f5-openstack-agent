@@ -37,6 +37,7 @@ from neutron_lbaas.services.loadbalancer import constants as lb_const
 from f5_openstack_agent.lbaasv2.drivers.bigip import constants_v2
 from f5_openstack_agent.lbaasv2.drivers.bigip import plugin_rpc
 from f5_openstack_agent.lbaasv2.drivers.bigip import utils
+from f5_openstack_agent.lbaasv2.drivers.bigip import exceptions as f5_ex
 
 LOG = logging.getLogger(__name__)
 
@@ -220,7 +221,7 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
         # Create the cache of provisioned services
         self.cache = LogicalServiceCache()
         self.last_resync = datetime.datetime.now()
-        self.last_clean_orphans = datetime.datetime.now() - datetime.timedelta(seconds=conf.service_resync_interval * 10)
+        self.last_clean_orphans = datetime.datetime.now() - datetime.timedelta(seconds=min(conf.service_resync_interval * 4, 60*60*12) + 180)
         self.needs_resync = False
         self.plugin_rpc = None
         self.pending_services = {}
@@ -434,6 +435,8 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
                 self.lbdriver.flush_cache()
             LOG.debug("periodic_sync: service_resync_interval expired: %s"
                       % str(self.needs_resync))
+        else:
+            LOG.info("ccloud - periodic_resync: Skipped because resync interval not expired. Waiting another {0} seconds".format((self.service_resync_interval - (now - self.last_resync ).seconds)))
         # resync if we need to
         if self.needs_resync:
             LOG.info('periodic_resync: Forcing resync of services.')
@@ -444,21 +447,17 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
                 self.needs_resync = True
             # clean any objects orphaned on devices and persist config
             # use different (longer) intervall for doing this because it takes a long time
-            if (now - self.last_clean_orphans).seconds > self.service_resync_interval * 2:
+            orphan_clean_interval = min(self.conf.service_resync_interval * 40, 60*60*6)
+            if (now - self.last_clean_orphans).seconds > orphan_clean_interval:
+                LOG.info("ccloud - periodic_resync: Cleaning orphan object from F5 device")
                 self.last_clean_orphans = now
                 if self.clean_orphaned_and_save_device_config():
                     self.needs_resync = True
-                LOG.info("ccloud - periodic_resync: Resync took {0} seconds".format((datetime.datetime.now() - self.last_clean_orphans).seconds))
-
-            # # clean any objects orphaned on devices and persist configs
-            # if self.clean_orphaned_objects_and_save_device_config():
-            #     self.needs_resync = True
-            # # Adopt sync interval to needed sync time
-            # if ((datetime.datetime.now() - now).seconds * 3) > self.service_resync_interval:
-            #     self.service_resync_interval = (datetime.datetime.now() - now).seconds * 3
-            # else:
-            #     self.service_resync_interval = self.conf.service_resync_interval
-            # LOG.info("ccloud - periodic_resync: Resync took {0} seconds - Next forced resync might happen in {1} seconds".format((datetime.datetime.now() - now).seconds, self.service_resync_interval))
+            else:
+                LOG.info("ccloud - periodic_resync: Cleaning orphan object skipped because cleanup interval not expired. Waiting another {0} seconds".format((orphan_clean_interval - (now - self.last_clean_orphans).seconds)))
+            LOG.info("ccloud - periodic_resync: Resync took {0} seconds".format((datetime.datetime.now() - now).seconds))
+        else:
+            LOG.info("ccloud - periodic_resync: Resync not needed! Discarding ...")
 
 
     def clean_orphaned_and_save_device_config(self):
@@ -467,20 +466,6 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
         # clean all other orphans and trigger resync if needed
         return self.clean_orphaned_objects_and_save_device_config()
 
-    # # ccloud: check 6 hour timeout to clean orphaned snat pools
-    # @periodic_task.periodic_task()
-    # def periodic_clean_orphans(self, context):
-    #     now = datetime.datetime.now()
-    #
-    #     # call every 6 hours
-    #     #if (now - self.last_clean_orphans).seconds > 60 * 60 * 6:
-    #     if (now - self.last_clean_orphans).seconds > 60 * 60 * 6:
-    #         self.last_clean_orphans = now
-    #         # clean orphan snats, resync not needed because they are unknown to neutron
-    #         self.clean_orphaned_snat_objects()
-    #         # clean all other orphans and trigger resync if needed
-    #         if self.clean_orphaned_objects_and_save_device_config():
-    #             self.needs_resync = True
 
     # ccloud: clean orphaned snat pools
     @log_helpers.log_method_call
