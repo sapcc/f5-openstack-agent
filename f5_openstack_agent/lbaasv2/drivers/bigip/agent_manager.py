@@ -17,6 +17,7 @@
 
 import datetime
 import uuid
+from random import randint
 
 from oslo_config import cfg
 from oslo_log import helpers as log_helpers
@@ -221,7 +222,12 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
         # Create the cache of provisioned services
         self.cache = LogicalServiceCache()
         self.last_resync = datetime.datetime.now()
-        self.last_clean_orphans = datetime.datetime.now() - datetime.timedelta(seconds=min(conf.service_resync_interval * 4, 60*60*12) + 180)
+        # try to avoid orphan cleaning right after start and schedule differently on agents
+        if self.conf.environment_group_number:
+            start = int(self.conf.environment_group_number) + 1
+        else:
+            start = randint(2, 5)
+        self.last_clean_orphans = datetime.datetime.now() - datetime.timedelta(seconds=min(conf.service_resync_interval * (40 -start), 60*60*2))
         self.needs_resync = False
         self.plugin_rpc = None
         self.pending_services = {}
