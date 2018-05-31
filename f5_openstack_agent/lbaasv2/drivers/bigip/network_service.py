@@ -258,7 +258,11 @@ class NetworkServiceBuilder(object):
                                 rd_id = (
                                     '%' + str(member_network['route_domain_id'])
                                 )
-                                member['address'] += rd_id
+                                if rd_id != '%0':
+                                    member['address'] += rd_id
+                                    LOG.info("ccloud: RDCHECK1 %s" % member['address'])
+                                else:
+                                    raise f5_ex.RouteDomainQueryException('ccloud: ERROR-3 RDCHECK3 Global routing disabled but route domain ID 0 was found. Discarding ...')
                             else:
                                 raise f5_ex.RouteDomainQueryException('ccloud: ERROR-1 Global routing disabled but route domain ID could not be found for pool member. Discarding ...')
                         else:
@@ -268,6 +272,7 @@ class NetworkServiceBuilder(object):
                             raise f5_ex.RouteDomainQueryException('ccloud: ERROR-3 Global routing disabled but NO member network ID given for pool member. Discarding ...')
                         else:
                             member['address'] += '%0'
+                            LOG.info("ccloud: RDCHECK2 %s" % member['address'])
 
         if 'vip_address' in service['loadbalancer']:
             loadbalancer = service['loadbalancer']
