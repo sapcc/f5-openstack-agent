@@ -260,19 +260,18 @@ class NetworkServiceBuilder(object):
                                 )
                                 if rd_id != '%0':
                                     member['address'] += rd_id
-                                    LOG.info("ccloud: RDCHECK1 %s" % member['address'])
                                 else:
-                                    raise f5_ex.RouteDomainQueryException('ccloud: ERROR-3 RDCHECK3 Global routing disabled but route domain ID 0 was found. Discarding ...')
+                                    raise f5_ex.RouteDomainQueryException('ccloud: NETWORK-RDCHECK1 Global routing disabled but route domain ID 0 was found. Discarding ...')
                             else:
-                                raise f5_ex.RouteDomainQueryException('ccloud: ERROR-1 Global routing disabled but route domain ID could not be found for pool member. Discarding ...')
+                                raise f5_ex.RouteDomainQueryException('ccloud: NETWORK-RDCHECK2 Global routing disabled but route domain ID could not be found for pool member. Discarding ...')
                         else:
-                            raise f5_ex.RouteDomainQueryException('ccloud: ERROR-2 Global routing disabled but NO member network can be found for pool member. Discarding ...')
+                            raise f5_ex.RouteDomainQueryException('ccloud: NETWORK-RDCHECK3 Global routing disabled but NO member network can be found for pool member. Discarding ...')
                     else:
                         if not self.conf.f5_global_routed_mode:
-                            raise f5_ex.RouteDomainQueryException('ccloud: ERROR-3 Global routing disabled but NO member network ID given for pool member. Discarding ...')
+                            raise f5_ex.RouteDomainQueryException('ccloud: NETWORK-RDCHECK4  Global routing disabled but NO member network ID given for pool member. Discarding ...')
                         else:
                             member['address'] += '%0'
-                            LOG.info("ccloud: RDCHECK2 %s" % member['address'])
+                            LOG.info("ccloud: NETWORK-RDCHECK5 Using default Route Domain because of global routing %s" % member['address'])
 
         if 'vip_address' in service['loadbalancer']:
             loadbalancer = service['loadbalancer']

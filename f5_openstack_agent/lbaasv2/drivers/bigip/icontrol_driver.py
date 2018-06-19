@@ -380,6 +380,8 @@ class iControlDriver(LBaaSBaseDriver):
         self.va_manager = resource_helper.BigIPResourceHelper(
             resource_helper.ResourceType.virtual_address)
 
+        self.orphan_cache = {}
+
         if self.conf.trace_service_requests:
             path = '/var/log/neutron/service/'
             if not os.path.exists(path):
@@ -808,16 +810,17 @@ class iControlDriver(LBaaSBaseDriver):
                     deployed_lbs = resource.get_resources(bigip, folder)
                     if deployed_lbs:
                         for lb in deployed_lbs:
-                            lb_id = lb.name[len(self.service_adapter.prefix):]
-                            if lb_id in deployed_lb_dict:
-                                deployed_lb_dict[lb_id][
-                                    'hostnames'].append(bigip.hostname)
-                            else:
-                                deployed_lb_dict[lb_id] = {
-                                    'id': lb_id,
-                                    'tenant_id': tenant_id,
-                                    'hostnames': [bigip.hostname]
-                                }
+                            if lb.name.startswith(self.service_adapter.prefix):
+                                lb_id = lb.name[len(self.service_adapter.prefix):]
+                                if lb_id in deployed_lb_dict:
+                                    deployed_lb_dict[lb_id][
+                                        'hostnames'].append(bigip.hostname)
+                                else:
+                                    deployed_lb_dict[lb_id] = {
+                                        'id': lb_id,
+                                        'tenant_id': tenant_id,
+                                        'hostnames': [bigip.hostname]
+                                    }
                     else:
                         # delay to assure we are not in the tenant creation
                         # process before a virtual address is created.
@@ -825,10 +828,10 @@ class iControlDriver(LBaaSBaseDriver):
                         deployed_lbs = resource.get_resources(bigip, folder)
                         if deployed_lbs:
                             for lb in deployed_lbs:
-                                lb_id = lb.name[
-                                    len(self.service_adapter.prefix):]
-                                deployed_lb_dict[lb_id] = \
-                                    {'id': lb_id, 'tenant_id': tenant_id}
+                                if lb.name.startswith(self.service_adapter.prefix):
+                                    lb_id = lb.name[len(self.service_adapter.prefix):]
+                                    deployed_lb_dict[lb_id] = \
+                                        {'id': lb_id, 'tenant_id': tenant_id}
                         else:
                             # Orphaned folder!
                             if purge_orphaned_folders:
@@ -880,6 +883,29 @@ class iControlDriver(LBaaSBaseDriver):
                                 }
         return deployed_virtual_dict
 
+    def _is_orphan(self, device_name, id):
+        if not id or not device_name:
+            return False
+        else:
+            key = device_name + '-' + id
+        if key in self.orphan_cache:
+            if self.orphan_cache[key] > 2:
+                del self.orphan_cache[key]
+                return True
+            else:
+                self.orphan_cache[key] += 1
+        else:
+            self.orphan_cache[key] = 1
+        return False
+
+    def _remove_from_orphan_cache(self, device_name, id):
+        if id and device_name:
+            key = device_name + '-' + id
+            if key in self.orphan_cache:
+                del self.orphan_cache[key]
+        return
+
+
     @serialized('purge_orphaned_nodes')
     @is_connected
     @log_helpers.log_method_call
@@ -906,8 +932,10 @@ class iControlDriver(LBaaSBaseDriver):
 
                 for node_name in orphaned_nodes:
                     try:
-                        node_helper.delete(bigip, name=urllib.quote(node_name),
-                                           partition=partition)
+                        if self._is_orphan(bigip.device_name, node_name):
+                            node_helper.delete(bigip, name=urllib.quote(node_name),
+                                               partition=partition)
+                            self._remove_from_orphan_cache(bigip.device_name, node_name)
                     except HTTPError as error:
                         if error.response.status_code == 400:
                             LOG.error(error.response)
@@ -984,13 +1012,17 @@ class iControlDriver(LBaaSBaseDriver):
                         resource_helper.ResourceType.pool).load(
                             bigip, pool_name, partition)
                     members = pool.members_s.get_collection()
-                    pool.delete()
+                    if self._is_orphan(bigip.device_name, pool_id):
+                        pool.delete()
+                        self._remove_from_orphan_cache(bigip.device_name, pool_id)
                     for member in members:
                         node_name = member.address
                         try:
-                            node_helper.delete(bigip,
-                                               name=urllib.quote(node_name),
-                                               partition=partition)
+                            if self._is_orphan(bigip.device_name, node_name):
+                                node_helper.delete(bigip,
+                                                       name=urllib.quote(node_name),
+                                                       partition=partition)
+                                self._remove_from_orphan_cache(bigip.device_name, node_name)
                         except HTTPError as e:
                             if e.response.status_code == 404:
                                 pass
@@ -1066,7 +1098,9 @@ class iControlDriver(LBaaSBaseDriver):
                         except HTTPError as err:
                             if err.response.status_code == 404:
                                 continue
-                    monitor.delete()
+                    if self._is_orphan(bigip.device_name, monitor_id):
+                        monitor.delete()
+                        self._remove_from_orphan_cache(bigip.device_name, monitor_id)
                 except TypeError as err:
                     if 'NoneType' in err:
                         LOG.exception("Could not find monitor {}".format(
@@ -1139,7 +1173,9 @@ class iControlDriver(LBaaSBaseDriver):
                     l7_policy = resource_helper.BigIPResourceHelper(
                         resource_helper.ResourceType.l7policy).load(
                             bigip, l7_policy_name, partition)
-                    l7_policy.delete()
+                    if self._is_orphan(bigip.device_name, l7_policy_id):
+                        l7_policy.delete()
+                        self._remove_from_orphan_cache(bigip.device_name, l7_policy_id)
                 except HTTPError as err:
                     if err.response.status_code == 404:
                         LOG.debug('l7_policy %s not on BIG-IP %s.'
@@ -1181,13 +1217,21 @@ class iControlDriver(LBaaSBaseDriver):
                                     resource_helper.ResourceType.pool).load(
                                         bigip, os.path.basename(vs.pool),
                                         partition)
-                                vs.delete()
-                                pool.delete()
+                                if self._is_orphan(bigip.device_name, vs.name):
+                                    vs.delete()
+                                    self._remove_from_orphan_cache(bigip.device_name, vs.name)
+                            if self._is_orphan(bigip.device_name, pool.name):
+                                    pool.delete()
+                                    self._remove_from_orphan_cache(bigip.device_name, pool.name)
                             else:
-                                vs.delete()
-                    resource_helper.BigIPResourceHelper(
-                        resource_helper.ResourceType.virtual_address).delete(
-                            bigip, va_name, partition)
+                                if self._is_orphan(bigip.device_name, vs.name):
+                                    vs.delete()
+                                    self._remove_from_orphan_cache(bigip.device_name, vs.name)
+                    if self._is_orphan(bigip.device_name, va_name):
+                        resource_helper.BigIPResourceHelper(
+                            resource_helper.ResourceType.virtual_address).delete(
+                                bigip, va_name, partition)
+                        self._remove_from_orphan_cache(bigip.device_name, va_name)
                 except HTTPError as err:
                     if err.response.status_code == 404:
                         LOG.debug('loadbalancer %s not on BIG-IP %s.'
@@ -1209,7 +1253,9 @@ class iControlDriver(LBaaSBaseDriver):
                     listener = resource_helper.BigIPResourceHelper(
                         resource_helper.ResourceType.virtual).load(
                             bigip, listener_name, partition)
-                    listener.delete()
+                    if self._is_orphan(bigip.device_name, listener_id):
+                        listener.delete()
+                        self._remove_from_orphan_cache(bigip.device_name, listener_id)
                 except HTTPError as err:
                     if err.response.status_code == 404:
                         LOG.debug('listener %s not on BIG-IP %s.'
