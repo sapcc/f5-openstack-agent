@@ -890,18 +890,21 @@ class iControlDriver(LBaaSBaseDriver):
             key = device_name + '-' + id
         if key in self.orphan_cache:
             if self.orphan_cache[key] > 2:
-                del self.orphan_cache[key]
+                LOG.info('ccloud: Orphan object %s marked for deletion %d times. Object will be deleted NOW' % (key, self.orphan_cache[key]))
                 return True
             else:
                 self.orphan_cache[key] += 1
+                LOG.info('ccloud: Orphan object %s marked for deletion %d times' % (key, self.orphan_cache[key]))
         else:
             self.orphan_cache[key] = 1
+            LOG.info('ccloud: Orphan object %s marked for deletion %d times' % (key, self.orphan_cache[key]))
         return False
 
     def _remove_from_orphan_cache(self, device_name, id):
         if id and device_name:
             key = device_name + '-' + id
             if key in self.orphan_cache:
+                LOG.info('ccloud: Orphan object %s got deleted and is removed from orphan cache' % key)
                 del self.orphan_cache[key]
         return
 
