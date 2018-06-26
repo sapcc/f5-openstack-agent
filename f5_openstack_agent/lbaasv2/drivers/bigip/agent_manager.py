@@ -228,9 +228,10 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
         else:
             start = randint(1, 3)
         # run orphan cleanup every 4 hours
-        self.orphans_clean_interval = 3600*4
+        self.orphans_clean_interval = 1800
         # schedule first run with 1 hour difference on every agent. Start first run after 6 minutes, 1h and 6 mins, ...
-        self.last_clean_orphans = datetime.datetime.now() - datetime.timedelta(seconds=(3600*(4-start)+3000))
+        # self.last_clean_orphans = datetime.datetime.now() - datetime.timedelta(seconds=(3600*(4-start)+3000))
+        self.last_clean_orphans = datetime.datetime.now() - datetime.timedelta(seconds=(1500-(600*(start - 1))))
 
         self.needs_resync = False
         self.plugin_rpc = None
@@ -458,12 +459,12 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
                     self.needs_resync = True
                 # clean any objects orphaned on devices and persist config
                 if (now - self.last_clean_orphans).seconds >= self.orphans_clean_interval:
-                    LOG.info("ccloud - periodic_resync: Cleaning orphan object from F5 device")
+                    LOG.info("ccloud - periodic_resync: Start cleaning orphan objects from F5 device")
                     self.last_clean_orphans = self.last_clean_orphans + datetime.timedelta(seconds=self.orphans_clean_interval)
                     if self.clean_orphaned_and_save_device_config():
                         self.needs_resync = True
                 else:
-                    LOG.info("ccloud - periodic_resync: Cleaning orphan object skipped because cleanup interval not expired. Waiting another {0} seconds".format((self.orphans_clean_interval - (now - self.last_clean_orphans).seconds)))
+                    LOG.info("ccloud - periodic_resync: Skipping cleaning orphan objects because cleanup interval not expired. Waiting another {0} seconds".format((self.orphans_clean_interval - (now - self.last_clean_orphans).seconds)))
                 LOG.info("ccloud - periodic_resync: Resync took {0} seconds".format((datetime.datetime.now() - now).seconds))
             else:
                 LOG.info("ccloud - periodic_resync: Resync not needed! Discarding ...")

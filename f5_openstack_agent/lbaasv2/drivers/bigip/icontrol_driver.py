@@ -905,7 +905,10 @@ class iControlDriver(LBaaSBaseDriver):
             key = device_name + '-' + id
             if key in self.orphan_cache:
                 LOG.info('ccloud: Orphan object %s got deleted and is removed from orphan cache' % key)
-                del self.orphan_cache[key]
+                try:
+                    del self.orphan_cache[key]
+                except Exception:
+                    pass
         return
 
 
@@ -913,9 +916,9 @@ class iControlDriver(LBaaSBaseDriver):
     @is_connected
     @log_helpers.log_method_call
     def purge_orphaned_nodes(self, tenant_members):
-        # wtn
         node_helper = resource_helper.BigIPResourceHelper(
             resource_helper.ResourceType.node)
+        pool_helper = resource_helper.BigIPResourceHelper(resource_helper.ResourceType.pool)
         for bigip in self.get_all_bigips():
             for tenant_id, members in tenant_members.iteritems():
                 partition = self.service_adapter.prefix + tenant_id
@@ -925,10 +928,18 @@ class iControlDriver(LBaaSBaseDriver):
                 member_addresses = []
                 for m in members:
                     member_addresses.append(m['address'])
+                # get all pool members from f5 to get rid of the ones not defined in openstack
+                pools = pool_helper.get_resources(bigip, partition=partition)
+                orphaned_members = []
+                for pool in pools:
+                    xmembers = pool.members_s.get_collection()
+                    for xmember in xmembers:
+                        if xmember.address.split('%')[0] not in member_addresses:
+                            orphaned_members.append(xmember)
                 # all nodes are orphaned which aren't referenced as member
                 orphaned_nodes = []
                 for n in nodes:
-                    if '%' not in n.address:
+                    if (not self.conf.f5_global_routed_mode) and ('%' not in n.address):
                         orphaned_nodes.append(n.name)
                     elif not n.address.split('%')[0] in member_addresses:
                         orphaned_nodes.append(n.name)
@@ -936,6 +947,9 @@ class iControlDriver(LBaaSBaseDriver):
                 for node_name in orphaned_nodes:
                     try:
                         if self._is_orphan(bigip.device_name, node_name):
+                            for omember in orphaned_members:
+                                if omember.address == node_name:
+                                    omember.delete()
                             node_helper.delete(bigip, name=urllib.quote(node_name),
                                                partition=partition)
                             self._remove_from_orphan_cache(bigip.device_name, node_name)
