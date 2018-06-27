@@ -889,7 +889,7 @@ class iControlDriver(LBaaSBaseDriver):
         else:
             key = device_name + '-' + id
         if key in self.orphan_cache:
-            if self.orphan_cache[key] > 2:
+            if self.orphan_cache[key] >= 2:
                 LOG.info('ccloud: Orphan object %s marked for deletion %d times. Object will be deleted NOW' % (key, self.orphan_cache[key]))
                 return True
             else:
