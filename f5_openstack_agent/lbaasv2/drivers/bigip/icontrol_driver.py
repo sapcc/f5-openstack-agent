@@ -886,7 +886,7 @@ class iControlDriver(LBaaSBaseDriver):
 
     def _is_orphan(self, device_name, id):
         # clear cache every 48 hours
-        if (self.orphan_cache_last_reset + datetime.timedelta(hours=1)) < datetime.datetime.now():
+        if (self.orphan_cache_last_reset + datetime.timedelta(hours=48)) < datetime.datetime.now():
             LOG.info('ccloud: Orphan objects cache cleared to avoid orphan orphans :-)')
             self.orphan_cache_last_reset = datetime.datetime.now()
             self.orphan_cache.clear()
