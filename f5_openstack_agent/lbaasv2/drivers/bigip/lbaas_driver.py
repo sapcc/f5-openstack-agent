@@ -185,3 +185,6 @@ class LBaaSBaseDriver(object):
     def delete_l7rule(self, l7rule, service):
         """LBaaS Delete l7rule."""
         raise NotImplementedError()
+
+    def get_orphans_cache(self):
+        raise NotImplementedError()

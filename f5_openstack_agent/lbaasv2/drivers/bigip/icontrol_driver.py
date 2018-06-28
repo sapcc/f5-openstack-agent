@@ -381,6 +381,7 @@ class iControlDriver(LBaaSBaseDriver):
             resource_helper.ResourceType.virtual_address)
 
         self.orphan_cache = {}
+        self.orphan_cache_last_reset = datetime.datetime.now()
 
         if self.conf.trace_service_requests:
             path = '/var/log/neutron/service/'
@@ -884,6 +885,12 @@ class iControlDriver(LBaaSBaseDriver):
         return deployed_virtual_dict
 
     def _is_orphan(self, device_name, id):
+        # clear cache every 48 hours
+        if (self.orphan_cache_last_reset + datetime.timedelta(hours=1)) < datetime.datetime.now():
+            LOG.info('ccloud: Orphan objects cache cleared to avoid orphan orphans :-)')
+            self.orphan_cache_last_reset = datetime.datetime.now()
+            self.orphan_cache.clear()
+        # check if orphan can be deleted or rise counter by 1
         if not id or not device_name:
             return False
         else:
@@ -911,6 +918,8 @@ class iControlDriver(LBaaSBaseDriver):
                     pass
         return
 
+    def get_orphans_cache(self):
+        return self.orphan_cache
 
     @serialized('purge_orphaned_nodes')
     @is_connected
