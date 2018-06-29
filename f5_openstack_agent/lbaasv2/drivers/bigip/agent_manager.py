@@ -467,7 +467,8 @@ class LbaasAgentManager(periodic_task.PeriodicTasks):  # b --> B
                         self.needs_resync = True
                     LOG.info("ccloud - periodic_resync: Finished cleaning orphan objects from F5 device. Remaining objects --> {0}".format(self.lbdriver.get_orphans_cache()))
                 else:
-                    LOG.info("ccloud - periodic_resync: Skipping cleaning orphan objects because cleanup interval not expired. Waiting another {0} seconds".format((self.orphans_clean_interval - (now - self.last_clean_orphans).seconds)))
+                    LOG.info("ccloud - periodic_resync: Skipping cleaning orphan objects because cleanup interval not expired. Waiting another {0} seconds"
+                             .format((self.last_clean_orphans + datetime.timedelta(minutes=self.orphans_clean_interval) - now).seconds))
                 LOG.info("ccloud - periodic_resync: Resync took {0} seconds".format((datetime.datetime.now() - now).seconds))
             else:
                 LOG.info("ccloud - periodic_resync: Resync not needed! Discarding ...")
