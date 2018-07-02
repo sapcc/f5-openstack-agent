@@ -1243,16 +1243,19 @@ class iControlDriver(LBaaSBaseDriver):
                                     resource_helper.ResourceType.pool).load(
                                         bigip, os.path.basename(vs.pool),
                                         partition)
-                                if self._is_orphan(bigip.device_name, vs.name):
+                                vs_name = vs.name
+                                if self._is_orphan(bigip.device_name, vs_name):
                                     vs.delete()
-                                    self._remove_from_orphan_cache(bigip.device_name, vs.name)
-                            if self._is_orphan(bigip.device_name, pool.name):
+                                    self._remove_from_orphan_cache(bigip.device_name, vs_name)
+                            pool_name = pool.name
+                            if self._is_orphan(bigip.device_name, pool_name):
                                     pool.delete()
-                                    self._remove_from_orphan_cache(bigip.device_name, pool.name)
+                                    self._remove_from_orphan_cache(bigip.device_name, pool_name)
                             else:
-                                if self._is_orphan(bigip.device_name, vs.name):
+                                vs_name = vs.name
+                                if self._is_orphan(bigip.device_name, vs_name):
                                     vs.delete()
-                                    self._remove_from_orphan_cache(bigip.device_name, vs.name)
+                                    self._remove_from_orphan_cache(bigip.device_name, vs_name)
                     if self._is_orphan(bigip.device_name, va_name):
                         resource_helper.BigIPResourceHelper(
                             resource_helper.ResourceType.virtual_address).delete(
